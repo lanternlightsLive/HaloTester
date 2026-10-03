@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Twitch Giveaway Winner Picker</title>
+<style>
+body{font-family:Arial,sans-serif;background:#111;color:#fff;margin:0;padding:28px}
+.wrap{max-width:850px;margin:auto}.card{background:#1d1d1d;border:1px solid #333;border-radius:14px;padding:22px;margin:18px 0}
+h1{margin:0 0 8px}.sub,.small{color:#aaa}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:15px}
+input,select,button{width:100%;box-sizing:border-box;padding:13px;border-radius:8px;font-size:16px}
+input,select{background:#111;color:#fff;border:1px solid #555}
+button{background:#6c35de;color:white;border:0;font-weight:bold;cursor:pointer;margin-top:18px}
+button:hover{background:#824cff}.hidden{display:none}
+.winner{text-align:center;font-size:42px;font-weight:bold;background:#090909;border:2px solid #6c35de;border-radius:12px;padding:35px 10px}
+.stats{text-align:center;color:#bbb;margin-top:12px}.error{color:#ff7777;margin-top:10px}
+@media(max-width:650px){.grid{grid-template-columns:1fr}.winner{font-size:30px}}
+
+.prize-image{
+  display:block;
+  width:100%;
+  max-width:400px;
+  max-height:300px;
+  object-fit:contain;
+  margin:15px auto 25px;
+  border-radius:12px;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>🎁 Halo Helmet Giveaway </h1>
+<p class="sub">Upload your Excel sheet and draw a weighted random winner.</p>
+
+<div class="card">
+<b>1. Upload Excel file</b><br><br>
+<input id="file" type="file" accept=".xlsx,.xls,.csv">
+<p id="status" class="small"></p>
+</div>
+
+<div id="controls" class="card hidden">
+<div class="grid">
+<div><b>Viewer name column</b><br><br><select id="nameCol"></select></div>
+<div><b>Number of entries column</b><br><br><select id="entryCol"></select></div>
+</div>
+<div id="stats" class="stats"></div>
+<p class="small">Every individual entry has an equal chance. A viewer with 64 entries has 64 chances; a viewer with 1 entry has 1 chance.</p>
+<button id="draw">DRAW WINNER</button>
+<div id="error" class="error"></div>
+</div>
+
+<div id="result" class="card hidden">
+  <div class="large" style="text-align:center">WINNER</div>
+
+  <img
+    src="halo-helmet.jpg"
+    alt="Halo Helmet Giveaway"
+    class="prize-image"
+  >
+
+  <div id="winner" class="winner">—</div>
+  <div id="winnerInfo" class="stats"></div>
+  
+<audio id="countdownSound" src="countdown.mp3" preload="auto"></audio>
+<audio id="winnerSound" src="winner.mp3" preload="auto"></audio>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script>
+let rows=[];
+const file=document.getElementById('file'), controls=document.getElementById('controls');
+const nameCol=document.getElementById('nameCol'), entryCol=document.getElementById('entryCol');
+const stats=document.getElementById('stats'), error=document.getElementById('error');
+
+file.addEventListener('change',async e=>{
+  error.textContent='';
+  document.getElementById('result').classList.add('hidden');
+  const f=e.target.files[0]; if(!f)return;
+  try{
+    const wb=XLSX.read(await f.arrayBuffer(),{type:'array'});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    rows=XLSX.utils.sheet_to_json(ws,{defval:''});
+    if(!rows.length)throw new Error('No data rows found.');
+    const headers=Object.keys(rows[0]);
+    nameCol.innerHTML=''; entryCol.innerHTML='';
+    headers.forEach(h=>{nameCol.add(new Option(h,h));entryCol.add(new Option(h,h));});
+    const low=headers.map(h=>h.toLowerCase());
+    const ni=low.findIndex(h=>/viewer|name|user|twitch/.test(h));
+    const ei=low.findIndex(h=>/entry|entries|number/.test(h));
+    if(ni>=0)nameCol.selectedIndex=ni;
+    if(ei>=0)entryCol.selectedIndex=ei;
+    updateStats(); controls.classList.remove('hidden');
+    document.getElementById('status').textContent=rows.length+' viewer rows loaded from '+f.name;
+  }catch(err){document.getElementById('status').textContent='';error.textContent='Could not read file: '+err.message;}
+});
+nameCol.addEventListener('change',updateStats); entryCol.addEventListener('change',updateStats);
+
+function getData(){
+  const n=nameCol.value,e=entryCol.value;
+  return rows.map(r=>({name:String(r[n]??'').trim(),entries:Number(String(r[e]??'').replace(/,/g,''))||0}))
+    .filter(x=>x.name&&x.entries>0);
+}
+function updateStats(){
+  const d=getData(), total=d.reduce((s,x)=>s+x.entries,0);
+  stats.textContent=d.length+' viewers • '+total.toLocaleString()+' total entries';
+}
+function randomInt(max){
+  const limit=Math.floor(4294967296/max)*max, a=new Uint32Array(1);
+  do{crypto.getRandomValues(a)}while(a[0]>=limit);
+  return a[0]%max;
+}
+document.getElementById('draw').addEventListener('click', async ()=>{
+  error.textContent='';
+
+  const d=getData();
+  const total=d.reduce((s,x)=>s+x.entries,0);
+
+  if(!d.length||!total){
+    error.textContent='No valid viewers/entries found. Check the columns.';
+    return;
+  }
+
+  // Prevent clicking DRAW multiple times
+  const drawButton=document.getElementById('draw');
+  drawButton.disabled=true;
+  drawButton.textContent='🎲 DRAWING...';
+
+  const countdownSound=document.getElementById('countdownSound');
+  const winnerSound=document.getElementById('winnerSound');
+
+  // Start suspense sound
+  countdownSound.currentTime=0;
+  countdownSound.play().catch(()=>{});
+
+  // Countdown display
+  const winnerBox=document.getElementById('winner');
+
+  document.getElementById('result').classList.remove('hidden');
+
+  winnerBox.textContent='3...';
+  await new Promise(r=>setTimeout(r,1000));
+
+  winnerBox.textContent='2...';
+  await new Promise(r=>setTimeout(r,1000));
+
+  winnerBox.textContent='1...';
+  await new Promise(r=>setTimeout(r,1000));
+
+  // Select winner AFTER countdown
+  const winning=randomInt(total)+1;
+
+  let sum=0;
+  let winner;
+
+  for(const p of d){
+    sum+=p.entries;
+    if(winning<=sum){
+      winner=p;
+      break;
+    }
+  }
+
+  // Show winner
+  winnerBox.textContent=winner.name;
+
+  document.getElementById('winnerInfo').textContent=
+    'Winning entry #'+winning.toLocaleString()+
+    ' of '+total.toLocaleString()+
+    ' • '+winner.entries+' entries';
+
+  // Stop suspense sound
+  countdownSound.pause();
+  countdownSound.currentTime=0;
+
+  // Play victory sound
+  winnerSound.currentTime=0;
+  winnerSound.play().catch(()=>{});
+
+  drawButton.disabled=false;
+  drawButton.textContent='DRAW WINNER';
+});
+</script>
+</body>
+</html>
